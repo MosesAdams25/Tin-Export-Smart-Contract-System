@@ -9,6 +9,9 @@
 (define-constant err-shipment-not-verified (err u107))
 (define-constant err-contract-completed (err u108))
 (define-constant err-invalid-oracle (err u109))
+(define-constant err-dispute-already-raised (err u110))
+(define-constant err-no-dispute (err u111))
+(define-constant err-dispute-not-resolved (err u112))
 
 (define-data-var next-contract-id uint u1)
 (define-data-var shipping-oracle principal tx-sender)
@@ -48,6 +51,17 @@
   }
 )
 
+(define-map disputes
+  { contract-id: uint }
+  {
+    raised-by: principal,
+    reason: (string-ascii 100),
+    timestamp: uint,
+    resolved: bool,
+    resolution: (optional (string-ascii 50))
+  }
+)
+
 (define-read-only (get-contract (contract-id uint))
   (map-get? export-contracts { contract-id: contract-id })
 )
@@ -66,6 +80,10 @@
 
 (define-read-only (get-shipping-oracle)
   (var-get shipping-oracle)
+)
+
+(define-read-only (get-dispute (contract-id uint))
+  (map-get? disputes { contract-id: contract-id })
 )
 
 (define-public (set-shipping-oracle (new-oracle principal))
@@ -124,6 +142,7 @@
       (contract-info (unwrap! (get-contract contract-id) err-not-found))
       (total-amount (get total-amount contract-info))
     )
+    (asserts! (is-none (get-dispute contract-id)) err-dispute-not-resolved)
     (asserts! (is-eq tx-sender (get importer contract-info)) err-unauthorized)
     (asserts! (is-eq (get status contract-info) "created") err-invalid-status)
     (asserts! (> total-amount u0) err-invalid-amount)
@@ -142,7 +161,7 @@
   )
 )
 
-(define-public (upload-customs-document 
+(define-public (upload-customs-document
   (contract-id uint)
   (doc-hash (buff 32))
   (doc-type (string-ascii 50)))
@@ -150,8 +169,9 @@
     (
       (contract-info (unwrap! (get-contract contract-id) err-not-found))
     )
+    (asserts! (is-none (get-dispute contract-id)) err-dispute-not-resolved)
     (asserts! (is-eq tx-sender (get exporter contract-info)) err-unauthorized)
-    (asserts! (or (is-eq (get status contract-info) "funded") 
+    (asserts! (or (is-eq (get status contract-info) "funded")
                   (is-eq (get status contract-info) "shipped")) err-invalid-status)
     
     (map-set customs-documents
@@ -184,6 +204,7 @@
       (contract-info (unwrap! (get-contract contract-id) err-not-found))
       (customs-doc (unwrap! (get-customs-document contract-id) err-not-found))
     )
+    (asserts! (is-none (get-dispute contract-id)) err-dispute-not-resolved)
     (asserts! (is-eq tx-sender contract-owner) err-owner-only)
     (asserts! (is-eq (get status contract-info) "documented") err-invalid-status)
     
@@ -209,6 +230,7 @@
     (
       (contract-info (unwrap! (get-contract contract-id) err-not-found))
     )
+    (asserts! (is-none (get-dispute contract-id)) err-dispute-not-resolved)
     (asserts! (is-eq tx-sender (get exporter contract-info)) err-unauthorized)
     (asserts! (is-eq (get status contract-info) "cleared") err-invalid-status)
     (asserts! (get customs-cleared contract-info) err-invalid-status)
@@ -230,6 +252,7 @@
     (
       (contract-info (unwrap! (get-contract contract-id) err-not-found))
     )
+    (asserts! (is-none (get-dispute contract-id)) err-dispute-not-resolved)
     (asserts! (is-eq tx-sender (var-get shipping-oracle)) err-invalid-oracle)
     (asserts! (is-eq (get status contract-info) "shipped") err-invalid-status)
     
@@ -252,6 +275,7 @@
       (escrow-amount (get escrow-amount contract-info))
       (exporter (get exporter contract-info))
     )
+    (asserts! (is-none (get-dispute contract-id)) err-dispute-not-resolved)
     (asserts! (is-eq (get status contract-info) "delivered") err-invalid-status)
     (asserts! (get shipping-verified contract-info) err-shipment-not-verified)
     (asserts! (not (get payment-released contract-info)) err-contract-completed)
@@ -278,12 +302,13 @@
       (escrow-amount (get escrow-amount contract-info))
       (importer (get importer contract-info))
     )
+    (asserts! (is-none (get-dispute contract-id)) err-dispute-not-resolved)
     (asserts! (is-eq tx-sender contract-owner) err-owner-only)
     (asserts! (not (get payment-released contract-info)) err-contract-completed)
     (asserts! (> escrow-amount u0) err-insufficient-payment)
-    
+
     (try! (as-contract (stx-transfer? escrow-amount tx-sender importer)))
-    
+
     (map-set export-contracts
       { contract-id: contract-id }
       (merge contract-info {
@@ -291,7 +316,101 @@
         status: "refunded"
       })
     )
-    
+
     (ok true)
+  )
+)
+
+(define-public (raise-dispute (contract-id uint) (reason (string-ascii 100)))
+  (let
+    (
+      (contract-info (unwrap! (get-contract contract-id) err-not-found))
+      (exporter (get exporter contract-info))
+      (importer (get importer contract-info))
+      (status (get status contract-info))
+    )
+    (asserts! (or (is-eq tx-sender exporter) (is-eq tx-sender importer)) err-unauthorized)
+    (asserts! (not (is-eq status "completed")) err-invalid-status)
+    (asserts! (not (is-eq status "refunded")) err-invalid-status)
+    (asserts! (is-none (get-dispute contract-id)) err-dispute-already-raised)
+    (map-set disputes
+      { contract-id: contract-id }
+      {
+        raised-by: tx-sender,
+        reason: reason,
+        timestamp: burn-block-height,
+        resolved: false,
+        resolution: none
+      }
+    )
+    (ok true)
+  )
+)
+
+(define-public (resolve-dispute (contract-id uint) (resolution (string-ascii 50)))
+  (let
+    (
+      (dispute-info (unwrap! (get-dispute contract-id) err-no-dispute))
+      (contract-info (unwrap! (get-contract contract-id) err-not-found))
+    )
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (not (get resolved dispute-info)) err-dispute-not-resolved)
+    (map-set disputes
+      { contract-id: contract-id }
+      (merge dispute-info { resolved: true, resolution: (some resolution) })
+    )
+    (asserts! (or (is-eq resolution "release") (is-eq resolution "refund") (is-eq resolution "cancel")) err-invalid-status)
+    (if (is-eq resolution "release")
+      (let
+        (
+          (escrow-amount (get escrow-amount contract-info))
+          (exporter (get exporter contract-info))
+        )
+        (asserts! (is-eq (get status contract-info) "delivered") err-invalid-status)
+        (asserts! (get shipping-verified contract-info) err-shipment-not-verified)
+        (asserts! (not (get payment-released contract-info)) err-contract-completed)
+        (asserts! (> escrow-amount u0) err-insufficient-payment)
+        (try! (as-contract (stx-transfer? escrow-amount tx-sender exporter)))
+        (map-set export-contracts
+          { contract-id: contract-id }
+          (merge contract-info {
+            payment-released: true,
+            status: "completed"
+          })
+        )
+        (ok true)
+      )
+      (if (is-eq resolution "refund")
+        (let
+          (
+            (escrow-amount (get escrow-amount contract-info))
+            (importer (get importer contract-info))
+        )
+        (asserts! (not (get payment-released contract-info)) err-contract-completed)
+        (asserts! (> escrow-amount u0) err-insufficient-payment)
+        (try! (as-contract (stx-transfer? escrow-amount tx-sender importer)))
+        (map-set export-contracts
+          { contract-id: contract-id }
+          (merge contract-info {
+            payment-released: true,
+            status: "refunded"
+          })
+        )
+        (ok true)
+      )
+      (if (is-eq resolution "cancel")
+        (begin
+          (map-set export-contracts
+            { contract-id: contract-id }
+            (merge contract-info {
+              status: "canceled"
+            })
+          )
+          (ok true)
+        )
+        (ok true)
+      )
+      )
+    )
   )
 )
