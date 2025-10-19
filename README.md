@@ -1,4 +1,4 @@
-> 🚢 Secure, automated tin export transactions with escrow payments and shipment verification
+Secure, automated tin export transactions with escrow payments and shipment verification
 
 ## 📝 Overview
 

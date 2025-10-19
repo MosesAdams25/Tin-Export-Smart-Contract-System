@@ -62,6 +62,16 @@
   }
 )
 
+(define-map contract-ratings
+  { contract-id: uint, rater: principal }
+  { ratee: principal, rating: uint }
+)
+
+(define-map user-ratings
+  { user: principal }
+  { total-rating: uint, rating-count: uint }
+)
+
 (define-read-only (get-contract (contract-id uint))
   (map-get? export-contracts { contract-id: contract-id })
 )
@@ -84,6 +94,10 @@
 
 (define-read-only (get-dispute (contract-id uint))
   (map-get? disputes { contract-id: contract-id })
+)
+
+(define-read-only (get-user-rating (user principal))
+  (default-to { total-rating: u0, rating-count: u0 } (map-get? user-ratings { user: user }))
 )
 
 (define-public (set-shipping-oracle (new-oracle principal))
@@ -412,5 +426,36 @@
       )
       )
     )
+  )
+)
+
+(define-public (rate-party (contract-id uint) (ratee principal) (rating uint))
+  (let
+    (
+      (contract-info (unwrap! (get-contract contract-id) err-not-found))
+      (exporter (get exporter contract-info))
+      (importer (get importer contract-info))
+      (status (get status contract-info))
+      (current-rating (get-user-rating ratee))
+      (total-rating (get total-rating current-rating))
+      (rating-count (get rating-count current-rating))
+    )
+    (asserts! (or (is-eq status "completed") (is-eq status "refunded")) err-invalid-status)
+    (asserts! (or (and (is-eq tx-sender exporter) (is-eq ratee importer))
+                  (and (is-eq tx-sender importer) (is-eq ratee exporter))) err-unauthorized)
+    (asserts! (and (>= rating u1) (<= rating u5)) err-invalid-amount)
+    (asserts! (is-none (map-get? contract-ratings { contract-id: contract-id, rater: tx-sender })) err-already-exists)
+    (map-set contract-ratings
+      { contract-id: contract-id, rater: tx-sender }
+      { ratee: ratee, rating: rating }
+    )
+    (map-set user-ratings
+      { user: ratee }
+      {
+        total-rating: (+ total-rating rating),
+        rating-count: (+ rating-count u1)
+      }
+    )
+    (ok true)
   )
 )
