@@ -181,6 +181,39 @@ For technical support or questions, please refer to the [Clarity documentation](
 
 The contract now includes a dispute resolution mechanism to handle conflicts between exporters and importers.
 
+## 🤝 Mutual Contract Cancellation
+
+Empowers both exporters and importers with collaborative contract termination capabilities, enabling seamless mutual agreement to cancel contracts before shipment begins.
+
+### Proposing Cancellation
+
+Either party can initiate a cancellation proposal for contracts in early stages:
+
+```clarity
+(contract-call? .tin-export-system propose-cancellation u1)
+```
+
+### Accepting Cancellation
+
+The other party can accept the proposal, automatically refunding any escrowed funds:
+
+```clarity
+(contract-call? .tin-export-system accept-cancellation u1)
+```
+
+### Cancellation Data Structure
+
+Cancellation proposals track:
+- **Proposed by**: Principal who initiated the cancellation
+- **Timestamp**: Block height when proposed
+- **Accepted**: Boolean confirmation status
+
+### Get Cancellation Proposal
+
+```clarity
+(contract-call? .tin-export-system get-cancellation-proposal u1)
+```
+
 ### Raising a Dispute
 
 Either the exporter or importer can raise a dispute on an active contract:
@@ -250,6 +283,7 @@ Disputes store:
 | u110 | Dispute already raised |
 | u111 | No dispute found |
 | u112 | Dispute not resolved |
+| u113 | Cancellation not proposed |
 
 ## ✨ Enhanced Key Features
 
@@ -259,6 +293,7 @@ Disputes store:
 - 🛡️ **Fraud Protection** - Multi-party verification system
 - ⚡ **Instant Settlement** - Automatic payment processing
 - 🚨 **Dispute Resolution** - Structured conflict handling with owner arbitration
+- 🤝 **Mutual Cancellation** - Collaborative contract termination with automatic refunds
 
 ## 🛡️ Enhanced Security Features
 
@@ -269,3 +304,4 @@ Disputes store:
 - ✅ Oracle-based delivery confirmation
 - ✅ Emergency refund capability
 - ✅ Dispute resolution with frozen operations during active disputes
+- ✅ Mutual cancellation requiring both party consent

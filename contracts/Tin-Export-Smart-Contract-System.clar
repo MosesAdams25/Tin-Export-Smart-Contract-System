@@ -12,6 +12,7 @@
 (define-constant err-dispute-already-raised (err u110))
 (define-constant err-no-dispute (err u111))
 (define-constant err-dispute-not-resolved (err u112))
+(define-constant err-cancellation-not-proposed (err u113))
 
 (define-data-var next-contract-id uint u1)
 (define-data-var shipping-oracle principal tx-sender)
@@ -63,14 +64,23 @@
 )
 
 (define-map contract-ratings
-  { contract-id: uint, rater: principal }
-  { ratee: principal, rating: uint }
-)
+   { contract-id: uint, rater: principal }
+   { ratee: principal, rating: uint }
+ )
 
 (define-map user-ratings
-  { user: principal }
-  { total-rating: uint, rating-count: uint }
-)
+   { user: principal }
+   { total-rating: uint, rating-count: uint }
+ )
+
+(define-map cancellation-proposals
+   { contract-id: uint }
+   {
+     proposed-by: principal,
+     timestamp: uint,
+     accepted: bool
+   }
+ )
 
 (define-read-only (get-contract (contract-id uint))
   (map-get? export-contracts { contract-id: contract-id })
@@ -97,8 +107,12 @@
 )
 
 (define-read-only (get-user-rating (user principal))
-  (default-to { total-rating: u0, rating-count: u0 } (map-get? user-ratings { user: user }))
-)
+   (default-to { total-rating: u0, rating-count: u0 } (map-get? user-ratings { user: user }))
+ )
+
+(define-read-only (get-cancellation-proposal (contract-id uint))
+   (map-get? cancellation-proposals { contract-id: contract-id })
+ )
 
 (define-public (set-shipping-oracle (new-oracle principal))
   (begin
@@ -429,33 +443,95 @@
   )
 )
 
+(define-public (propose-cancellation (contract-id uint))
+   (let
+     (
+       (contract-info (unwrap! (get-contract contract-id) err-not-found))
+       (exporter (get exporter contract-info))
+       (importer (get importer contract-info))
+       (status (get status contract-info))
+     )
+     (asserts! (or (is-eq tx-sender exporter) (is-eq tx-sender importer)) err-unauthorized)
+     (asserts! (or (is-eq status "created") (is-eq status "funded")) err-invalid-status)
+     (asserts! (is-none (get-cancellation-proposal contract-id)) err-already-exists)
+     (map-set cancellation-proposals
+       { contract-id: contract-id }
+       {
+         proposed-by: tx-sender,
+         timestamp: burn-block-height,
+         accepted: false
+       }
+     )
+     (ok true)
+   )
+ )
+
+(define-public (accept-cancellation (contract-id uint))
+   (let
+     (
+       (contract-info (unwrap! (get-contract contract-id) err-not-found))
+       (proposal (unwrap! (get-cancellation-proposal contract-id) err-cancellation-not-proposed))
+       (exporter (get exporter contract-info))
+       (importer (get importer contract-info))
+       (escrow-amount (get escrow-amount contract-info))
+     )
+     (asserts! (or (is-eq tx-sender exporter) (is-eq tx-sender importer)) err-unauthorized)
+     (asserts! (not (is-eq tx-sender (get proposed-by proposal))) err-unauthorized)
+     (asserts! (not (get accepted proposal)) err-already-exists)
+     (map-set cancellation-proposals
+       { contract-id: contract-id }
+       (merge proposal { accepted: true })
+     )
+     (if (> escrow-amount u0)
+       (let
+         ()
+         (try! (as-contract (stx-transfer? escrow-amount tx-sender importer)))
+         (map-set export-contracts
+           { contract-id: contract-id }
+           (merge contract-info {
+             escrow-amount: u0,
+             status: "canceled"
+           })
+         )
+       )
+       (map-set export-contracts
+         { contract-id: contract-id }
+         (merge contract-info {
+           status: "canceled"
+         })
+       )
+     )
+     (ok true)
+   )
+ )
+
 (define-public (rate-party (contract-id uint) (ratee principal) (rating uint))
-  (let
-    (
-      (contract-info (unwrap! (get-contract contract-id) err-not-found))
-      (exporter (get exporter contract-info))
-      (importer (get importer contract-info))
-      (status (get status contract-info))
-      (current-rating (get-user-rating ratee))
-      (total-rating (get total-rating current-rating))
-      (rating-count (get rating-count current-rating))
-    )
-    (asserts! (or (is-eq status "completed") (is-eq status "refunded")) err-invalid-status)
-    (asserts! (or (and (is-eq tx-sender exporter) (is-eq ratee importer))
-                  (and (is-eq tx-sender importer) (is-eq ratee exporter))) err-unauthorized)
-    (asserts! (and (>= rating u1) (<= rating u5)) err-invalid-amount)
-    (asserts! (is-none (map-get? contract-ratings { contract-id: contract-id, rater: tx-sender })) err-already-exists)
-    (map-set contract-ratings
-      { contract-id: contract-id, rater: tx-sender }
-      { ratee: ratee, rating: rating }
-    )
-    (map-set user-ratings
-      { user: ratee }
-      {
-        total-rating: (+ total-rating rating),
-        rating-count: (+ rating-count u1)
-      }
-    )
-    (ok true)
-  )
-)
+   (let
+     (
+       (contract-info (unwrap! (get-contract contract-id) err-not-found))
+       (exporter (get exporter contract-info))
+       (importer (get importer contract-info))
+       (status (get status contract-info))
+       (current-rating (get-user-rating ratee))
+       (total-rating (get total-rating current-rating))
+       (rating-count (get rating-count current-rating))
+     )
+     (asserts! (or (is-eq status "completed") (is-eq status "refunded")) err-invalid-status)
+     (asserts! (or (and (is-eq tx-sender exporter) (is-eq ratee importer))
+                   (and (is-eq tx-sender importer) (is-eq ratee exporter))) err-unauthorized)
+     (asserts! (and (>= rating u1) (<= rating u5)) err-invalid-amount)
+     (asserts! (is-none (map-get? contract-ratings { contract-id: contract-id, rater: tx-sender })) err-already-exists)
+     (map-set contract-ratings
+       { contract-id: contract-id, rater: tx-sender }
+       { ratee: ratee, rating: rating }
+     )
+     (map-set user-ratings
+       { user: ratee }
+       {
+         total-rating: (+ total-rating rating),
+         rating-count: (+ rating-count u1)
+       }
+     )
+     (ok true)
+   )
+ )
