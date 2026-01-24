@@ -214,6 +214,44 @@ Cancellation proposals track:
 (contract-call? .tin-export-system get-cancellation-proposal u1)
 ```
 
+## ✏️ Contract Amendments
+
+Enables exporters to propose changes to contract terms like quantity or price, with importer approval required for finalization.
+
+### Proposing an Amendment
+
+Exporters can suggest modifications to unfunded contracts:
+
+```clarity
+(contract-call? .tin-export-system propose-amendment
+  u1                    ;; contract-id
+  (some u1200)          ;; new quantity (optional)
+  (some u55000))        ;; new price per ton (optional)
+```
+
+### Accepting an Amendment
+
+Importers can approve proposed changes, updating the contract terms:
+
+```clarity
+(contract-call? .tin-export-system accept-amendment u1)
+```
+
+### Amendment Data Structure
+
+Amendment proposals include:
+- **Proposed by**: Principal who initiated the amendment
+- **New Quantity**: Optional updated tin quantity
+- **New Price**: Optional updated price per ton
+- **Timestamp**: Block height when proposed
+- **Accepted**: Boolean confirmation status
+
+### Get Amendment Proposal
+
+```clarity
+(contract-call? .tin-export-system get-amendment-proposal u1)
+```
+
 ### Raising a Dispute
 
 Either the exporter or importer can raise a dispute on an active contract:
@@ -284,6 +322,7 @@ Disputes store:
 | u111 | No dispute found |
 | u112 | Dispute not resolved |
 | u113 | Cancellation not proposed |
+| u114 | Amendment already proposed |
 
 ## ✨ Enhanced Key Features
 
@@ -294,6 +333,7 @@ Disputes store:
 - ⚡ **Instant Settlement** - Automatic payment processing
 - 🚨 **Dispute Resolution** - Structured conflict handling with owner arbitration
 - 🤝 **Mutual Cancellation** - Collaborative contract termination with automatic refunds
+- ✏️ **Contract Amendments** - Flexible term modifications with mutual consent
 
 ## 🛡️ Enhanced Security Features
 
@@ -305,3 +345,4 @@ Disputes store:
 - ✅ Emergency refund capability
 - ✅ Dispute resolution with frozen operations during active disputes
 - ✅ Mutual cancellation requiring both party consent
+- ✅ Amendment proposals restricted to unfunded contracts with exporter initiation and importer approval

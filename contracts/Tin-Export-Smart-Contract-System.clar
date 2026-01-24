@@ -13,6 +13,7 @@
 (define-constant err-no-dispute (err u111))
 (define-constant err-dispute-not-resolved (err u112))
 (define-constant err-cancellation-not-proposed (err u113))
+(define-constant err-amendment-already-proposed (err u114))
 
 (define-data-var next-contract-id uint u1)
 (define-data-var shipping-oracle principal tx-sender)
@@ -74,13 +75,24 @@
  )
 
 (define-map cancellation-proposals
-   { contract-id: uint }
-   {
-     proposed-by: principal,
-     timestamp: uint,
-     accepted: bool
-   }
- )
+    { contract-id: uint }
+    {
+      proposed-by: principal,
+      timestamp: uint,
+      accepted: bool
+    }
+  )
+
+(define-map amendment-proposals
+    { contract-id: uint }
+    {
+      proposed-by: principal,
+      new-quantity: (optional uint),
+      new-price: (optional uint),
+      timestamp: uint,
+      accepted: bool
+    }
+  )
 
 (define-read-only (get-contract (contract-id uint))
   (map-get? export-contracts { contract-id: contract-id })
@@ -111,8 +123,12 @@
  )
 
 (define-read-only (get-cancellation-proposal (contract-id uint))
-   (map-get? cancellation-proposals { contract-id: contract-id })
- )
+    (map-get? cancellation-proposals { contract-id: contract-id })
+  )
+
+(define-read-only (get-amendment-proposal (contract-id uint))
+    (map-get? amendment-proposals { contract-id: contract-id })
+  )
 
 (define-public (set-shipping-oracle (new-oracle principal))
   (begin
@@ -249,6 +265,67 @@
       })
     )
     
+    (ok true)
+  )
+)
+
+(define-public (propose-amendment (contract-id uint) (new-quantity (optional uint)) (new-price (optional uint)))
+  (let
+    (
+      (contract-info (unwrap! (get-contract contract-id) err-not-found))
+      (exporter (get exporter contract-info))
+      (status (get status contract-info))
+    )
+    (asserts! (is-eq tx-sender exporter) err-unauthorized)
+    (asserts! (is-eq status "created") err-invalid-status)
+    (asserts! (is-none (get-amendment-proposal contract-id)) err-amendment-already-proposed)
+    (asserts! (or (is-some new-quantity) (is-some new-price)) err-invalid-amount)
+    (if (is-some new-quantity)
+      (asserts! (> (unwrap! new-quantity err-invalid-amount) u0) err-invalid-amount)
+      true
+    )
+    (if (is-some new-price)
+      (asserts! (> (unwrap! new-price err-invalid-amount) u0) err-invalid-amount)
+      true
+    )
+    (map-set amendment-proposals
+      { contract-id: contract-id }
+      {
+        proposed-by: tx-sender,
+        new-quantity: new-quantity,
+        new-price: new-price,
+        timestamp: burn-block-height,
+        accepted: false
+      }
+    )
+    (ok true)
+  )
+)
+
+(define-public (accept-amendment (contract-id uint))
+  (let
+    (
+      (contract-info (unwrap! (get-contract contract-id) err-not-found))
+      (proposal (unwrap! (get-amendment-proposal contract-id) err-not-found))
+      (importer (get importer contract-info))
+      (new-quantity (default-to (get tin-quantity contract-info) (get new-quantity proposal)))
+      (new-price (default-to (get price-per-ton contract-info) (get new-price proposal)))
+      (total-amount (* new-quantity new-price))
+    )
+    (asserts! (is-eq tx-sender importer) err-unauthorized)
+    (asserts! (not (get accepted proposal)) err-already-exists)
+    (map-set amendment-proposals
+      { contract-id: contract-id }
+      (merge proposal { accepted: true })
+    )
+    (map-set export-contracts
+      { contract-id: contract-id }
+      (merge contract-info {
+        tin-quantity: new-quantity,
+        price-per-ton: new-price,
+        total-amount: total-amount
+      })
+    )
     (ok true)
   )
 )
